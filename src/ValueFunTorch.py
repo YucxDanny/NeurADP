@@ -1,7 +1,7 @@
 from ast import Dict, List
 
 # from msilib.schema import ActionText
-from telnetlib import Telnet
+# from telnetlib import Telnet
 from LearningAgent import LearningAgent
 from Action import Action
 from Environment import Environment
@@ -17,14 +17,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.tensorboard import SummaryWriter
+
+# from torch.utils.data import Dataset, DataLoader
 from abc import ABC, abstractmethod
-import numpy as np
+
+# import numpy as np
 from copy import deepcopy
-from os.path import isfile, isdir, join
+from os.path import join
 from os import makedirs
-import pickle
+
+# import pickle
 
 
 class ValueFunction(ABC):
@@ -33,10 +36,9 @@ class ValueFunction(ABC):
         super().__init__()
 
         log_dir = join(log_dir, type(self).__name__ + "/")
-        if not isdir(log_dir):
-            makedirs(log_dir)
+        makedirs(log_dir, exist_ok=True)
 
-        # self.summary_writer = SummaryWriter(log_dir)
+        self.summary_writer = SummaryWriter(log_dir)
 
     def add_to_logs(self, tag: str, value: float, step: int) -> None:
         self.summary_writer.add_scalar(tag, value, step)
@@ -75,7 +77,7 @@ class Q_Value_NN(nn.Module):
         )
 
         self.lstm = nn.LSTM(
-            input_size=max_cap * 2 + 1,
+            input_size=100 + 1,
             hidden_size=200,
             num_layers=1,
             bidirectional=True,
@@ -111,26 +113,24 @@ class Q_Value_NN(nn.Module):
             ) = data
 
             path_location_embed = self.location_embed(
-                path_location_input
+                path_location_input.long()
             )  # (num_actions*num_agents, max_cap*2+1, embedding_dim)
             delay_masked = torch.masked_fill(
                 delay_input, delay_input == -1, 0
             )  # (num_actions*num_agents, max_cap*2+1)
             path_input = torch.concatenate(
-                [path_location_embed, delay_masked], dim=-1
+                [path_location_embed, delay_masked.unsqueeze(-1)], dim=-1
             )  # (num_actions*num_agents, max_cap*2+1, embedding_dim+1)
 
-            path_embed: torch.Tensor = self.lstm(
+            path_embed, _ = self.lstm(
                 path_input
             )  # (num_actions*num_agents, max_cap*2+1, hidden_size*2)
 
             current_time_embed: torch.Tensor = self.time_embed(
-                current_time_input
-            )  # (100)
-            current_time_embed = (
-                current_time_embed.unsqueeze(0)
-                .unsqueeze(1)
-                .repeat(len(path_embed[0]), len(path_embed[1]), 1)
+                current_time_input.unsqueeze(-1)
+            )  # (num_actions*num_agents, 100)
+            current_time_embed = current_time_embed.unsqueeze(1).repeat(
+                1, len(path_embed[1]), 1
             )  # (num_actions*num_agents, max_cap*2+1, 100)
 
             other_agents_input: torch.Tensor = (
@@ -155,7 +155,8 @@ class Q_Value_NN(nn.Module):
                     num_requests_input,
                 ],
                 dim=-1,
-            ).view(-1, len(path_embed[1]) * (len(path_embed[2]) + 102))
+            )
+            # .view(len(path_embed[0]), len(path_embed[1]) * (len(path_embed[2]) + 102))
             # (num_actions*num_agents, max_cap*2+1, hidden_size*2+100+1+1)
             state_embed: torch.Tensor = self.state_embed(state_embed_input)
             # (num_actions*num_agents, max_cap*2+1, 300)
@@ -184,7 +185,7 @@ class DataBatch:
 
         for experience in experiences:
             if is_current:
-                if "current" not in experience.representation.keys:
+                if "current" not in experience.representation.keys():
                     experience.representation["current"] = self._format_input_batch(
                         [[agent] for agent in experience.agents],
                         experience.time,
@@ -192,7 +193,7 @@ class DataBatch:
                     )
                 input = deepcopy(experience.representation["current"])
             else:
-                if "next" not in experience.representation.keys:
+                if "next" not in experience.representation.keys():
                     experience.representation["next"] = (
                         self._get_input_batch_next_state(experience)
                     )
@@ -229,23 +230,21 @@ class DataBatch:
 
             shape_info_batch.append(shape_info)
 
-            path_location_input = torch.tensor(
+            path_location_input = torch.stack(
                 [
                     action
                     for agent in action_input_all_agents["path_location_input"]
                     for action in agent
-                ],
-                dtype=torch.float32,
+                ]
             )
             # (num_actions*num_agents, max_cap*2+1)
 
-            delay_input = torch.tensor(
+            delay_input = torch.stack(
                 [
                     action
                     for agent in action_input_all_agents["delay_input"]
                     for action in agent
-                ],
-                dtype=torch.float32,
+                ]
             )
             # (num_actions*num_agents, max_cap*2+1)
 
@@ -263,7 +262,7 @@ class DataBatch:
                 [
                     action
                     for agent in action_input_all_agents["other_agents_input"]
-                    for action in action
+                    for action in agent
                 ],
                 dtype=torch.float32,
             )
@@ -504,27 +503,28 @@ class PathBasedNN(ValueFunction):
         else:
             self.model.load_state_dict(torch.load(load_model_loc))
 
-        self.target_model = Q_Value_NN(
+        self.target_model: nn.Module = Q_Value_NN(
             self.envt.NUM_LOCATIONS, self.envt.MAX_CAPACITY
-        ).load_state_dict(self.model.state_dict())
-        self.update_target_model = self._soft_update_fun(self.target_model, self.model)
+        )
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.update_target_model = self._soft_update_fun()
 
-    def _soft_update_fun(
-        self, target_model: nn.Module, source_model: nn.Module
-    ) -> None:
-        target_params = target_model.parameters()
-        source_params = source_model.parameters()
-        for target_param, source_param in zip(target_params, source_params):
-            target_param.data.copy_(
-                self.TARGET_UPDATE_TAU * source_param.data
-                + (1.0 - self.TARGET_UPDATE_TAU) * target_param.data
+    def _soft_update_fun(self) -> None:
+        for target_param, source_param in zip(
+            self.target_model.state_dict().items(),
+            self.model.state_dict().items(),
+        ):
+            target_param = (
+                target_param[0],
+                self.TARGET_UPDATE_TAU * source_param[1]
+                + (1.0 - self.TARGET_UPDATE_TAU) * target_param[1],
             )
 
     def remember(self, experience: Experience) -> None:
         """Remembers an experience for training."""
         self.replay_buffer.add(experience)
 
-    def update(self, central_agent: CentralAgent, num_epoches: int) -> None:
+    def update(self, central_agent: CentralAgent, num_epoches: int = 3) -> None:
         """
         Updates the policy based on experiences in the replay buffer.
         The policy is updated using a Q-learning algorithm.
@@ -600,7 +600,7 @@ class PathBasedNN(ValueFunction):
             loss_fun = nn.functional.mse_loss
 
             self.model.train()
-            for _ in num_epoches:
+            for _ in range(num_epoches):
                 optimizer.zero_grad()
                 predicted_targets: torch.Tensor = (self.model(data_input))[0]
                 loss = loss_fun(predicted_targets, supervised_targets)
@@ -660,10 +660,14 @@ class PathBasedNN(ValueFunction):
             List[List[Tuple[Action, float]]]: List of lists of tuples of actions and values.
         """
 
-        data_inputs, data_shape_info = DataBatch(experiences, is_current=False)[:]
+        data_inputs, data_shape_info = DataBatch(
+            experiences, is_current=False, envt=self.envt
+        )[:]
         # Tuple[List[Tuple[torch.tensor]], List[List[int]]]
         # data_inputs: List[Tuple[torch.tensor]]
         # data_shape_info: List[List[int]]
+
+        self.model.eval()
 
         if network is None:
             expected_future_values_all_agents: List[torch.Tensor] = self.model(

@@ -3,7 +3,7 @@ from Action import Action
 from Request import Request
 from Path import PathNode, RequestInfo
 
-from typing import Type, List, Generator, Tuple, Deque
+from typing import List, Generator, Tuple, Deque
 
 from abc import ABCMeta, abstractmethod  # Abstract Base Classes，ABC
 

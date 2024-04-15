@@ -32,10 +32,23 @@ class Oracle(object):
         """
         Get a list of the best feasible actions for each agent.
         The list of feasible actions is a list of lists, where each inner list contains the feasible actions for a single agent.
+
+        Args:
+        ------
+            - agents: List[LearningAgent]
+            - requests: List[Request]
+            - MAX_ACTIONS: int
+            - MAX_TRIPS_SIZE_1: int
+            - MAX_IS_FEASIBLE_CALLS: int
+
+        Returns:
+        ------
+            - feasible_actions_all_agents: List[List[Action]]
         """
 
         # Associate requests with closest MAX_TRIPS_SIZE_1 vehicles
         def _distance_to_request(agent: LearningAgent, request: Request):
+            """Returns the travel time from the agent to the request."""
             return (
                 self.envt.get_travel_time(agent.position.next_location, request.pickup)
                 + agent.position.time_to_next_location
@@ -44,10 +57,12 @@ class Oracle(object):
         MAX_TRIPS_SIZE_1 = min(MAX_TRIPS_SIZE_1, len(agents))
         requests_for_each_agent: List[List[Request]] = [[] for _ in range(len(agents))]
         for request_idx, request in enumerate(requests):
-            times_to_pickup = [
+            # Get the closest MAX_TRIPS_SIZE_1 vehicles
+            times_to_pickup: List[Tuple[int, float]] = [
                 (agent_idx, _distance_to_request(agent, request))
                 for agent_idx, agent in enumerate(agents)
             ]
+            # Sort requests by time to pickup
             times_to_pickup.sort(key=lambda x: x[1])
             for idx in range(MAX_TRIPS_SIZE_1):
                 agent_idx = times_to_pickup[idx][0]
@@ -123,7 +138,7 @@ class Oracle(object):
                 if MAX_ACTIONS >= 0 and len(trips) >= MAX_ACTIONS:
                     break
 
-            feasible_actions_all_agents.append(trips)
+            feasible_actions_all_agents.append(trips[1:])
 
         return feasible_actions_all_agents
 
