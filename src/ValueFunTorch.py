@@ -1,4 +1,5 @@
 from ast import Dict, List
+from tqdm import tqdm
 
 # from msilib.schema import ActionText
 # from telnetlib import Telnet
@@ -186,8 +187,18 @@ class DataBatch:
         for experience in experiences:
             if is_current:
                 if "current" not in experience.representation.keys():
+                    all_agents_post_actions: List[List[LearningAgent]] = []
+
+                    for agent, feasible_actions in zip(
+                        experience.agents, experience.feasible_actions_all_agents
+                    ):
+                        agents_post_actions: List[LearningAgent] = []
+                        for action in feasible_actions:
+                            agents_post_actions.append(agent)
+                        all_agents_post_actions.append(agents_post_actions)
+
                     experience.representation["current"] = self._format_input_batch(
-                        [[agent] for agent in experience.agents],
+                        all_agents_post_actions,
                         experience.time,
                         experience.num_requests,
                     )
@@ -475,8 +486,8 @@ class PathBasedNN(ValueFunction):
         load_model_loc: str,
         log_dir: str,
         GAMMA: float = -1,
-        BATCH_SIZE_TRAIN: int = 8,
-        BATCH_SIZE_PREDICT: int = 16,
+        BATCH_SIZE_TRAIN: int = 4,
+        # BATCH_SIZE_PREDICT: int = 16,
         TARGET_UPDATE_TAU: float = 0.1,
     ) -> None:
         super().__init__(log_dir)
@@ -484,7 +495,7 @@ class PathBasedNN(ValueFunction):
         self.envt = envt
         self.GAMMA = GAMMA if GAMMA != -1 else (1 - (0.1 * 60 / self.envt.EPOCH_LENGTH))
         self.BATCH_SIZE_TRAIN = BATCH_SIZE_TRAIN
-        self.BATCH_SIZE_PREDICT = BATCH_SIZE_PREDICT
+        # self.BATCH_SIZE_PREDICT = BATCH_SIZE_PREDICT
         self.TARGET_UPDATE_TAU = TARGET_UPDATE_TAU
 
         self._epoch_id = 0
@@ -524,7 +535,7 @@ class PathBasedNN(ValueFunction):
         """Remembers an experience for training."""
         self.replay_buffer.add(experience)
 
-    def update(self, central_agent: CentralAgent, num_epoches: int = 3) -> None:
+    def update(self, central_agent: CentralAgent, num_epoches: int = 100) -> None:
         """
         Updates the policy based on experiences in the replay buffer.
         The policy is updated using a Q-learning algorithm.
@@ -536,7 +547,7 @@ class PathBasedNN(ValueFunction):
             num_epoches (int): Number of epochs to train the policy
         """
         # Check if replay buffer has enough samples for an update
-        num_min_train_samples = int(5e5 / self.envt.NUM_AGENTS)
+        num_min_train_samples = int(5 / self.envt.NUM_AGENTS)
         if num_min_train_samples > len(self.replay_buffer):
             return
 
@@ -554,7 +565,7 @@ class PathBasedNN(ValueFunction):
         # ITERATIVELY UPDATE POLICY BASED ON SAMPLE
         for experience_idx, experience in enumerate(experiences):
             if weights is not None:
-                weights = torch.tensor([weights[experience_idx]]).repeat(
+                weight = torch.tensor([weights[experience_idx]]).repeat(
                     self.envt.NUM_AGENTS
                 )  # (num_agents,)
 
@@ -583,13 +594,15 @@ class PathBasedNN(ValueFunction):
                 action_index: int = feasible_actions[id1].index(action)
 
                 for id2, tensor in enumerate(data_input_all_actions[0]):
-                    data_input[id2] = torch.concatenate(
-                        [
-                            data_input[id2],
-                            tensor[cumulative_num_actions + action_index],
-                        ],
-                        dim=-1,
-                    )
+                    if id1 == 0:
+                        data_input.append(tensor[cumulative_num_actions + action_index])
+                    else:
+                        data_input[id2] = torch.stack(
+                            [
+                                data_input[id2],
+                                tensor[cumulative_num_actions + action_index],
+                            ]
+                        )
                 cumulative_num_actions += data_shape_info_all_actions[0][id1]
 
             data_input: List[Tuple[torch.Tensor]] = [tuple(data_input)]
@@ -600,15 +613,17 @@ class PathBasedNN(ValueFunction):
             loss_fun = nn.functional.mse_loss
 
             self.model.train()
-            for _ in range(num_epoches):
-                optimizer.zero_grad()
-                predicted_targets: torch.Tensor = (self.model(data_input))[0]
-                loss = loss_fun(predicted_targets, supervised_targets)
-                weighted_loss = loss * weights.unsqueeze(1)
-                mean_weighted_loss = torch.mean(weighted_loss)
-                mean_weighted_loss.backward()
-
-                optimizer.step()
+            with tqdm(total=num_epoches) as t:
+                for _ in range(num_epoches):
+                    optimizer.zero_grad()
+                    predicted_targets: torch.Tensor = (self.model(data_input))[0]
+                    loss = loss_fun(predicted_targets, supervised_targets)
+                    weighted_loss = loss * weight.unsqueeze(1)
+                    mean_weighted_loss = torch.mean(weighted_loss)
+                    mean_weighted_loss.backward()
+                    optimizer.step()
+                    t.set_postfix(loss="{:05.3f}".format(mean_weighted_loss))
+                    t.update()
 
     def _reconstruct_NN_output(
         self, NN_outputs: List[torch.Tensor], shape_infos: List[List[int]]

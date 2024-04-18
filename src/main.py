@@ -125,25 +125,25 @@ def run_epoch(
                 value_function.update(central_agent)
 
                 # Diagnostics
-                for action, score in scored_actions_all_agents[0]:
-                    print(
-                        "{}: {}, {}, {}".format(
-                            score,
-                            action.requests,
-                            action.new_path,
-                            action.new_path.total_delay,
-                        )
-                    )
-                print()
-                for _, (action, score) in enumerate(scored_final_actions[:10]):
-                    print(
-                        "{}: {}, {}, {}".format(
-                            score,
-                            action.requests,
-                            action.new_path,
-                            action.new_path.total_delay,
-                        )
-                    )
+                # for action, score in scored_actions_all_agents[0]:
+                #     print(
+                #         "{}: {}, {}, {}".format(
+                #             score,
+                #             action.requests,
+                #             action.new_path,
+                #             action.new_path.total_delay,
+                #         )
+                #     )
+                # print()
+                # for _, (action, score) in enumerate(scored_final_actions[:10]):
+                #     print(
+                #         "{}: {}, {}, {}".format(
+                #             score,
+                #             action.requests,
+                #             action.new_path,
+                #             action.new_path.total_delay,
+                #         )
+                #     )
 
         # Sanity check
         # for agent in agents:

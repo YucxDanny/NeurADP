@@ -3,3 +3,4 @@ torchvision
 pandas
 numpy
 tensorboard
+tqdm
