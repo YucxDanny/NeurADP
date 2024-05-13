@@ -42,6 +42,7 @@ class ValueFunction(ABC):
         self.summary_writer = SummaryWriter(log_dir)
 
     def add_to_logs(self, tag: str, value: float, step: int) -> None:
+        # Add a scalar value to the logs
         self.summary_writer.add_scalar(tag, value, step)
 
     @abstractmethod
@@ -77,6 +78,7 @@ class Q_Value_NN(nn.Module):
             num_embeddings=num_locs + 1, embedding_dim=100, padding_idx=0
         )
 
+        # LSTM
         self.lstm = nn.LSTM(
             input_size=100 + 1,
             hidden_size=200,
@@ -131,23 +133,27 @@ class Q_Value_NN(nn.Module):
                 current_time_input.unsqueeze(-1)
             )  # (num_actions*num_agents, 100)
             current_time_embed = current_time_embed.unsqueeze(1).repeat(
-                1, len(path_embed[1]), 1
+                1, len(path_embed[0]), 1
             )  # (num_actions*num_agents, max_cap*2+1, 100)
 
             other_agents_input: torch.Tensor = (
                 other_agents_input.unsqueeze(-1)
                 .unsqueeze(-1)
-                .repeat(1, len(path_embed[1]), 1)
+                .repeat(1, len(path_embed[0]), 1)
             )
             # (num_actions*num_agents, max_cap*2+1, 1)
 
             num_requests_input: torch.Tensor = (
                 num_requests_input.unsqueeze(-1)
                 .unsqueeze(-1)
-                .repeat(1, len(path_embed[1]), 1)
+                .repeat(1, len(path_embed[0]), 1)
             )
             # (num_actions*num_agents, max_cap*2+1, 1)
 
+            # # 如果path_embed只有两个维度，则在第一个维度上增加一个维度
+            path_embed = (
+                path_embed.unsqueeze(0) if len(path_embed.shape) == 2 else path_embed
+            )
             state_embed_input = torch.concatenate(
                 [
                     path_embed,
@@ -186,6 +192,7 @@ class DataBatch:
 
         for experience in experiences:
             if is_current:
+                # 如果是当前时间步，则直接使用当前状态
                 if "current" not in experience.representation.keys():
                     all_agents_post_actions: List[List[LearningAgent]] = []
 
@@ -204,6 +211,7 @@ class DataBatch:
                     )
                 input = deepcopy(experience.representation["current"])
             else:
+                # 如果是下一个时间步，则使用下一个状态
                 if "next" not in experience.representation.keys():
                     experience.representation["next"] = (
                         self._get_input_batch_next_state(experience)
@@ -459,6 +467,7 @@ class DataBatch:
         for agent, feasible_actions in zip(
             experience.agents, experience.feasible_actions_all_agents
         ):
+            # print(feasible_actions)
             agents_post_actions: List[LearningAgent] = []
             for action in feasible_actions:
                 # Moving agent according to feasible action
@@ -471,8 +480,8 @@ class DataBatch:
             all_agents_post_actions.append(agents_post_actions)
 
         next_time = experience.time + self.envt.EPOCH_LENGTH
-
         # Return formatted inputs of these agents
+        # print(all_agents_post_actions)
         return self._format_input_batch(
             all_agents_post_actions, next_time, experience.num_requests
         )
@@ -535,7 +544,7 @@ class PathBasedNN(ValueFunction):
         """Remembers an experience for training."""
         self.replay_buffer.add(experience)
 
-    def update(self, central_agent: CentralAgent, num_epoches: int = 100) -> None:
+    def update(self, central_agent: CentralAgent, num_epoches: int = 20) -> None:
         """
         Updates the policy based on experiences in the replay buffer.
         The policy is updated using a Q-learning algorithm.
@@ -604,6 +613,10 @@ class PathBasedNN(ValueFunction):
                             ]
                         )
                 cumulative_num_actions += data_shape_info_all_actions[0][id1]
+            # 为data_input的每个元素都添加一个维度
+            if len(data_input[0].shape) == 1:
+                for idx, data_input_elem in enumerate(data_input):
+                    data_input[idx] = data_input_elem.unsqueeze(0)
 
             data_input: List[Tuple[torch.Tensor]] = [tuple(data_input)]
 
@@ -613,17 +626,19 @@ class PathBasedNN(ValueFunction):
             loss_fun = nn.functional.mse_loss
 
             self.model.train()
-            with tqdm(total=num_epoches) as t:
-                for _ in range(num_epoches):
-                    optimizer.zero_grad()
-                    predicted_targets: torch.Tensor = (self.model(data_input))[0]
-                    loss = loss_fun(predicted_targets, supervised_targets)
-                    weighted_loss = loss * weight.unsqueeze(1)
-                    mean_weighted_loss = torch.mean(weighted_loss)
-                    mean_weighted_loss.backward()
-                    optimizer.step()
-                    t.set_postfix(loss="{:05.3f}".format(mean_weighted_loss))
-                    t.update()
+
+            # with tqdm(total=num_epoches) as t:
+            for _ in range(num_epoches):
+                # print(data_input)
+                optimizer.zero_grad()
+                predicted_targets: torch.Tensor = (self.model(data_input))[0]
+                loss = loss_fun(predicted_targets, supervised_targets)
+                weighted_loss = loss * weight.unsqueeze(1)
+                mean_weighted_loss = torch.mean(weighted_loss)
+                mean_weighted_loss.backward()
+                optimizer.step()
+                # t.set_postfix(loss="{:05.3f}".format(mean_weighted_loss))
+                # t.update()
 
     def _reconstruct_NN_output(
         self, NN_outputs: List[torch.Tensor], shape_infos: List[List[int]]
@@ -634,11 +649,13 @@ class PathBasedNN(ValueFunction):
         The list of lists represents the output of all agents.
 
         Args:
-            NN_outputs (List[torch.Tensor]): List of NN outputs.
-            shape_infos (List[List[int]]): List of shape infos.
+        ------
+            - NN_outputs (List[torch.Tensor]): List of NN outputs.
+            - shape_infos (List[List[int]]): List of shape infos.
 
         Returns:
-            List[List[float]]: Reconstructed list of lists of floats.
+        ------
+            - List[List[float]]: Reconstructed list of lists of floats.
         """
 
         output_as_list: List[List[float]] = []
@@ -648,6 +665,8 @@ class PathBasedNN(ValueFunction):
             value_list: List[float] = tensor.squeeze().tolist()
             cumulative_num_actions: int = 0
             for num_actions in shape_info:
+                if not isinstance(value_list, list):
+                    value_list = [value_list]
                 value_per_agent: List[float] = value_list[
                     cumulative_num_actions : cumulative_num_actions + num_actions
                 ]

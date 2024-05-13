@@ -90,6 +90,7 @@ def run_epoch(
             envt.current_time,
             len(current_requests),
         )
+        # print("Experience: ", experience.feasible_actions_all_agents)
         scored_actions_all_agents: List[List[Tuple[Action, float]]] = (
             value_function.get_value([experience])
         )
@@ -188,8 +189,8 @@ if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--capacity", type=int, default=6)
-    parser.add_argument("-n", "--numagents", type=int, default=2)
-    parser.add_argument("-d", "--pickupdelay", type=int, default=20)
+    parser.add_argument("-n", "--numagents", type=int, default=1)
+    parser.add_argument("-d", "--pickupdelay", type=int, default=6000)
     parser.add_argument("-t", "--decisioninterval", type=int, default=60)
     parser.add_argument("-m", "--modellocation", type=str, default=None)
     args = parser.parse_args()
